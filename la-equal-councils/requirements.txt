@@ -1,0 +1,9 @@
+geopandas>=1.0
+pyogrio
+shapely>=2.0
+networkx
+scipy
+numpy
+pandas
+matplotlib
+tomli; python_version < "3.11"

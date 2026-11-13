@@ -1,0 +1,6 @@
+# 99 districts that ignore today's councils entirely: the most compact shapes.
+districts  = 99
+seeds      = "kmeans"
+keep_whole = "none"
+stick      = 0
+out = "../out/blank-slate"

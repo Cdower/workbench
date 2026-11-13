@@ -1,0 +1,293 @@
+<title>99 Equal Councils</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: atlas sheet. Narrow header + numbers, big map, detail card, dot-strip comparing spreads. Thomas Guide pastels for districts. */
+:root {
+  --paper: #f4f6f3;
+  --sheet: #ffffff;
+  --ink: #1d2427;
+  --muted: #5d6a6e;
+  --rule: #d6ddd9;
+  --accent: #c2410c;
+  --under: #2b7a8c;
+  --line: #ffffff;
+  --today-line: #1d2427;
+  --t0: #f3d36b; --t1: #f2a7a0; --t2: #a9d4a1; --t3: #9cc5e6; --t4: #d6b9e2; --t5: #f4bf87;
+  --display: "Archivo", "Arial Narrow", "Helvetica Neue", Arial, sans-serif;
+  --body: "Archivo", "Helvetica Neue", Arial, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #13181a; --sheet: #1b2225; --ink: #e8eeec; --muted: #9aa8ab; --rule: #2e383b;
+    --accent: #fb8c4f; --under: #6cc3d3; --line: #13181a; --today-line: #e8eeec;
+    --t0: #8a7633; --t1: #8c5552; --t2: #4f7a4b; --t3: #456f8f; --t4: #6e5a7e; --t5: #8d6640;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --paper: #13181a; --sheet: #1b2225; --ink: #e8eeec; --muted: #9aa8ab; --rule: #2e383b;
+  --accent: #fb8c4f; --under: #6cc3d3; --line: #13181a; --today-line: #e8eeec;
+  --t0: #8a7633; --t1: #8c5552; --t2: #4f7a4b; --t3: #456f8f; --t4: #6e5a7e; --t5: #8d6640;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  background: var(--paper); color: var(--ink); font-family: var(--body); font-size: 15px; line-height: 1.5;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 20px 40px;
+}
+.wrap { max-width: 1180px; margin: 0 auto; display: grid; gap: 20px; }
+header { display: grid; gap: 6px; }
+.eyebrow { font: 600 12px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+h1 { font-family: var(--display); font-stretch: 72%; font-weight: 800; font-size: clamp(38px, 7vw, 68px); line-height: .95; margin: 0; letter-spacing: -.01em; text-wrap: balance; }
+.lead { max-width: 62ch; margin: 4px 0 0; color: var(--ink); font-size: 16px; }
+.num { font-family: var(--mono); font-variant-numeric: tabular-nums; font-weight: 600; }
+.over { color: var(--accent); } .under { color: var(--under); }
+
+.board { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 16px; align-items: start; }
+@media (max-width: 860px) { .board { grid-template-columns: minmax(0, 1fr); } }
+
+.mapbox { background: var(--sheet); border: 1px solid var(--rule); border-radius: 6px; position: relative; overflow: hidden; }
+.toolbar { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; padding: 10px 12px; border-bottom: 1px solid var(--rule); }
+.seg { display: inline-flex; border: 1px solid var(--rule); border-radius: 5px; overflow: hidden; }
+.seg button { font: 600 13px var(--body); font-stretch: 85%; padding: 7px 12px; background: transparent; color: var(--muted); border: 0; cursor: pointer; }
+.seg button[aria-pressed="true"] { background: var(--ink); color: var(--sheet); }
+.seg button:focus-visible, .chk input:focus-visible, .reset:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.chk { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; color: var(--muted); cursor: pointer; }
+.reset { margin-left: auto; font: 500 12px var(--mono); color: var(--muted); background: none; border: 1px solid var(--rule); border-radius: 4px; padding: 5px 8px; cursor: pointer; }
+svg.map { display: block; width: 100%; height: auto; aspect-ratio: 5 / 6; max-height: 78vh; touch-action: none; cursor: grab; }
+svg.map path.d { stroke: var(--line); stroke-width: .8; vector-effect: non-scaling-stroke; cursor: pointer; }
+svg.map path.d:hover { filter: brightness(.94); }
+svg.map path.sel { stroke: var(--ink); stroke-width: 2.2; }
+svg.map path.ghost { fill: none; stroke: var(--today-line); stroke-width: .7; stroke-dasharray: 3 2; vector-effect: non-scaling-stroke; opacity: .7; pointer-events: none; }
+.legend { position: absolute; left: 12px; bottom: 10px; font: 11px var(--mono); color: var(--muted); background: color-mix(in srgb, var(--sheet) 85%, transparent); padding: 6px 8px; border-radius: 4px; display: grid; gap: 4px; }
+.ramp { width: 180px; height: 8px; border-radius: 2px; }
+.ramp-labels { display: flex; justify-content: space-between; width: 180px; }
+
+aside.card { background: var(--sheet); border: 1px solid var(--rule); border-radius: 6px; padding: 16px; display: grid; gap: 12px; }
+.card h2 { font-family: var(--display); font-stretch: 80%; font-weight: 750; font-size: 24px; line-height: 1.05; margin: 0; text-wrap: balance; }
+.kv { display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; margin: 0; font-size: 14px; }
+.kv dt { color: var(--muted); }
+.kv dd { margin: 0; text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.bar { height: 10px; display: flex; border-radius: 2px; overflow: hidden; background: var(--rule); }
+.bar span { display: block; height: 100%; }
+.small { font-size: 13px; color: var(--muted); margin: 0; }
+.src { font-size: 13px; margin: 0; }
+
+section.strip { background: var(--sheet); border: 1px solid var(--rule); border-radius: 6px; padding: 16px; display: grid; gap: 8px; }
+.strip h3 { margin: 0; font-family: var(--display); font-stretch: 80%; font-size: 20px; font-weight: 750; }
+.strip svg { width: 100%; height: auto; display: block; overflow: visible; }
+.strip text { fill: var(--muted); font: 11px var(--mono); }
+.strip .lab { fill: var(--ink); font: 600 12px var(--body); }
+footer { font-size: 13px; color: var(--muted); max-width: 80ch; display: grid; gap: 6px; }
+footer p { margin: 0; }
+footer a { color: inherit; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="eyebrow">Los Angeles · 2020 Census · 99 neighborhood councils</div>
+    <h1>99 Equal Councils</h1>
+    <p class="lead">Today LA’s neighborhood councils hold anywhere from <span class="num under" id="minNow">2,959</span> to <span class="num over" id="maxNow">96,588</span> residents, and <span id="addedNames">58,700 people in Pacific Palisades and Brentwood</span> have no council at all. Redrawn here so every one of the 99 represents about <span class="num" id="target">39,124</span> people.</p>
+  </header>
+
+  <div class="board">
+    <div class="mapbox">
+      <div class="toolbar">
+        <div class="seg" role="group" aria-label="Map view">
+          <button id="vNew" aria-pressed="true">Redrawn</button>
+          <button id="vNow" aria-pressed="false">Today</button>
+        </div>
+        <label class="chk"><input type="checkbox" id="ghost" checked> Today’s lines</label>
+        <button class="reset" id="reset">Reset zoom</button>
+      </div>
+      <svg class="map" id="map" viewBox="0 0 500 600" role="img" aria-label="Map of Los Angeles neighborhood council districts"></svg>
+      <div class="legend" id="legend"></div>
+    </div>
+    <aside class="card" id="card" aria-live="polite"></aside>
+  </div>
+
+  <section class="strip">
+    <h3>Every council, by population</h3>
+    <p class="small">Each dot is one council. The line marks the equal share.</p>
+    <svg id="strip" viewBox="0 0 900 150"></svg>
+  </section>
+
+  <footer>
+    <p id="method"></p>
+    <p>Inspired by Neil Freeman’s <a href="https://fakeisthenewreal.org/reform/">Electoral College Reform</a> map. Boundaries: City of LA certified NC layer. Population: 2020 Census P.L. 94-171.</p>
+  </footer>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
+<script>
+const DATA = __DATA__;
+const fmt = d3.format(","), pct = v => (v > 0 ? "+" : "") + v.toFixed(1) + "%";
+const T = DATA.target;
+document.getElementById("target").textContent = fmt(T);
+const certified = DATA.ncs.features.filter(f => f.properties.certified);
+const nowPops = certified.map(f => f.properties.pop);
+const addedF = DATA.ncs.features.filter(f => !f.properties.certified).sort((a, b) => b.properties.pop - a.properties.pop);
+const added = addedF.map(f => f.properties.name);
+const addedPop = d3.sum(addedF, f => f.properties.pop);
+document.getElementById("minNow").textContent = fmt(d3.min(nowPops));
+document.getElementById("maxNow").textContent = fmt(d3.max(nowPops));
+document.getElementById("method").textContent = DATA.method;
+if (added.length) {
+  const named = added.filter(n => n !== "Other City Land");
+  const list = named.length <= 2 ? named.join(" and ")
+    : `${named.slice(0, 3).join(", ")} and ${named.length - 3 > 0 ? (named.length - 3) + " smaller pockets" : ""}`.replace(/ and $/, "");
+  document.getElementById("addedNames").textContent = `${fmt(Math.round(addedPop / 100) * 100)} people in ${list}`;
+}
+else document.getElementById("addedNames").parentElement.innerHTML = document.getElementById("addedNames").parentElement.innerHTML.replace(/, and <span id="addedNames">.*?<\/span> have no council at all/, "");
+
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const tint = c => `var(--t${c})`;
+const devColor = () => {
+  const s = d3.scaleDiverging([-1.3, 0, 1.3], t => d3.interpolateRgbBasis([css("--under"), css("--sheet"), css("--accent")])(t)).clamp(true);
+  return p => s(Math.log(Math.max(p, 1) / T));
+};
+
+const svg = d3.select("#map"), W = 500, H = 600;
+const proj = d3.geoMercator().fitExtent([[10, 10], [W - 10, H - 10]], DATA.districts);
+const path = d3.geoPath(proj);
+svg.append("defs").html(`<pattern id="nonc" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+  <rect width="6" height="6" fill="var(--sheet)"></rect><line x1="0" y1="0" x2="0" y2="6" stroke="var(--muted)" stroke-width="1.6"></line></pattern>`);
+const g = svg.append("g");
+const lyrNew = g.append("g"), lyrNow = g.append("g"), lyrGhost = g.append("g");
+
+let view = "new", selected = null, devFill = devColor();
+
+lyrNew.selectAll("path").data(DATA.districts.features).join("path")
+  .attr("class", "d").attr("d", path).attr("fill", d => tint(d.properties.c))
+  .on("click", (e, d) => select(d, "new")).append("title").text(d => d.properties.name);
+lyrNow.selectAll("path").data(DATA.ncs.features).join("path")
+  .attr("class", "d").attr("d", path)
+  .on("click", (e, d) => select(d, "now")).append("title").text(d => d.properties.name);
+lyrGhost.selectAll("path").data(DATA.ncs.features).join("path").attr("class", "ghost").attr("d", path);
+
+function paintNow() { devFill = devColor(); lyrNow.selectAll("path").attr("fill", d => d.properties.certified ? devFill(d.properties.pop) : "url(#nonc)"); drawLegend(); }
+
+const zoom = d3.zoom().scaleExtent([1, 14]).translateExtent([[-50, -50], [W + 50, H + 50]])
+  .on("zoom", e => g.attr("transform", e.transform));
+svg.call(zoom);
+document.getElementById("reset").onclick = () => svg.transition().duration(400).call(zoom.transform, d3.zoomIdentity);
+
+function setView(v) {
+  view = v;
+  document.getElementById("vNew").setAttribute("aria-pressed", v === "new");
+  document.getElementById("vNow").setAttribute("aria-pressed", v === "now");
+  lyrNew.attr("display", v === "new" ? null : "none");
+  lyrNow.attr("display", v === "now" ? null : "none");
+  lyrGhost.attr("display", v === "new" && document.getElementById("ghost").checked ? null : "none");
+  document.getElementById("ghost").parentElement.hidden = v !== "new";
+  drawLegend();
+  const pool = (v === "new" ? DATA.districts : DATA.ncs).features;
+  const keep = selected && pool.find(f => f.properties.name === selected.properties.name);
+  select(keep || pool[defaultIdx(v)], v);
+}
+document.getElementById("vNew").onclick = () => setView("new");
+document.getElementById("vNow").onclick = () => setView("now");
+document.getElementById("ghost").onchange = () => setView(view);
+
+function defaultIdx(v) {
+  const fs = (v === "new" ? DATA.districts : DATA.ncs).features;
+  return d3.maxIndex(fs, f => v === "new" ? (f.properties.name.includes("Koreatown") ? 1 : 0) : (f.properties.certified ? f.properties.pop : 0));
+}
+
+function drawLegend() {
+  const el = document.getElementById("legend");
+  if (view === "now") {
+    const stops = d3.range(0, 1.0001, .1).map(t => devFill(T * Math.exp(-1.3 + 2.6 * t)));
+    el.innerHTML = `<span>Residents vs. equal share</span>
+      <div class="ramp" style="background:linear-gradient(90deg,${stops.join(",")})"></div>
+      <div class="ramp-labels"><span>¼×</span><span>${fmt(T)}</span><span>4×</span></div>
+      ${added.length ? `<span style="display:flex;gap:6px;align-items:center"><svg width="14" height="10"><rect width="14" height="10" fill="url(#nonc)"></rect></svg>no NC today</span>` : ""}`;
+  } else {
+    el.innerHTML = `<span>${DATA.districts.features.length} districts · each ≈ ${fmt(T)}</span>` +
+      (document.getElementById("ghost").checked ? `<span>dashed = today’s boundaries</span>` : "");
+  }
+}
+
+function select(d, v) {
+  selected = d;
+  const lyr = v === "new" ? lyrNew : lyrNow;
+  g.selectAll("path.d").classed("sel", false);
+  lyr.selectAll("path").filter(x => x === d).classed("sel", true).raise();
+  const p = d.properties, card = document.getElementById("card");
+  const devCls = p.dev_pct > 0 ? "over" : "under";
+  if (v === "new") {
+    const segs = [["pct_hisp", "--t5", "Latino"], ["pct_white", "--t3", "White"], ["pct_asian", "--t2", "Asian"], ["pct_black", "--t4", "Black"]];
+    const other = Math.max(0, 100 - segs.reduce((a, s) => a + p[s[0]], 0));
+    card.innerHTML = `
+      <div class="eyebrow">Redrawn district ${p.district_id}</div>
+      <h2>${p.name}</h2>
+      <dl class="kv">
+        <dt>Residents</dt><dd>${fmt(p.pop)}</dd>
+        <dt>vs. equal share</dt><dd class="${devCls}">${pct(p.dev_pct)}</dd>
+        <dt>Area</dt><dd>${p.area_sqmi.toFixed(1)} sq mi</dd>
+        <dt>Successor to</dt><dd style="font-family:var(--body);text-align:right">${p.heir}</dd>
+      </dl>
+      <div><p class="small" style="margin-bottom:4px">Where its residents live today</p><p class="src">${p.src || "—"}</p></div>
+      <div><div class="bar">${segs.map(s => `<span style="width:${p[s[0]]}%;background:var(${s[1]})" title="${s[2]} ${p[s[0]]}%"></span>`).join("")}<span style="width:${other}%;background:var(--rule)"></span></div>
+      <p class="small" style="margin-top:4px">${segs.map(s => `${s[2]} ${Math.round(p[s[0]])}%`).join(" · ")}</p></div>
+      <p class="small">Tap any district for details. Pinch or scroll to zoom.</p>`;
+  } else if (!p.certified) {
+    card.innerHTML = `
+      <div class="eyebrow">No neighborhood council today</div>
+      <h2>${p.name}</h2>
+      <dl class="kv">
+        <dt>Residents (2020)</dt><dd>${fmt(p.pop)}</dd>
+        <dt>Area</dt><dd>${p.area_sqmi.toFixed(1)} sq mi</dd>
+      </dl>
+      <p class="small">${p.name === "Other City Land" ? "Thin strips of the city that fall between certified neighborhood councils, mostly with no residents." : "Part of the City of LA but outside every certified neighborhood council (named here by its LA Times neighborhood)."} The redraw folds it in like any other neighborhood.</p>
+      <p class="small">Tap any council for details. Pinch or scroll to zoom.</p>`;
+  } else {
+    const ratio = p.pop / T;
+    card.innerHTML = `
+      <div class="eyebrow">Neighborhood council today</div>
+      <h2>${p.name}</h2>
+      <dl class="kv">
+        <dt>Residents (2020)</dt><dd>${fmt(p.pop)}</dd>
+        <dt>vs. equal share</dt><dd class="${devCls}">${pct(p.dev_pct)}</dd>
+        <dt>Area</dt><dd>${p.area_sqmi.toFixed(1)} sq mi</dd>
+      </dl>
+      <p class="small">${ratio >= 1 ? `Holds as many people as ${ratio.toFixed(1)} equal councils.` : `Would need ${(1 / ratio).toFixed(1)}× its population to reach an equal share.`}</p>
+      <p class="small">Tap any council for details. Pinch or scroll to zoom.</p>`;
+  }
+  drawStrip();
+}
+
+function drawStrip() {
+  const s = d3.select("#strip"); s.selectAll("*").remove();
+  const x = d3.scaleLinear([0, Math.ceil(d3.max(nowPops) / 10000) * 10000], [110, 880]);
+  const rows = [["Today", certified, 45], ["Redrawn", DATA.districts.features, 105]];
+  s.append("g").attr("transform", "translate(0,128)").call(d3.axisBottom(x).ticks(6).tickFormat(d3.format("~s")).tickSizeOuter(0))
+    .call(a => a.select(".domain").attr("stroke", "var(--rule)")).call(a => a.selectAll("line").attr("stroke", "var(--rule)"));
+  s.append("line").attr("x1", x(T)).attr("x2", x(T)).attr("y1", 18).attr("y2", 128).attr("stroke", "var(--ink)").attr("stroke-dasharray", "3 3");
+  s.append("text").attr("x", x(T) + 4).attr("y", 14).text(`equal share ${fmt(T)}`);
+  rows.forEach(([lab, fs, y]) => {
+    s.append("text").attr("class", "lab").attr("x", 0).attr("y", y + 4).text(lab);
+    const dots = fs.map(f => ({ f, x: x(f.properties.pop) }));
+    // light vertical jitter by rank so overlapping dots stay visible
+    dots.sort((a, b) => a.x - b.x).forEach((d, i) => d.y = y + ((i % 5) - 2) * 4);
+    s.append("g").selectAll("circle").data(dots).join("circle")
+      .attr("cx", d => d.x).attr("cy", d => d.y).attr("r", d => d.f === selected ? 5.5 : 3.2)
+      .attr("fill", d => lab === "Today" ? devFill(d.f.properties.pop) : tint(d.f.properties.c))
+      .attr("stroke", d => d.f === selected ? "var(--ink)" : "var(--line)").attr("stroke-width", d => d.f === selected ? 2 : .6)
+      .style("cursor", "pointer").on("click", (e, d) => { if ((lab === "Today") !== (view === "now")) setView(lab === "Today" ? "now" : "new"); select(d.f, lab === "Today" ? "now" : "new"); })
+      .append("title").text(d => `${d.f.properties.name}: ${fmt(d.f.properties.pop)}`);
+  });
+}
+
+paintNow();
+window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { paintNow(); drawStrip(); });
+new MutationObserver(() => { paintNow(); drawStrip(); }).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+setView("new");
+</script>

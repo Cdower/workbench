@@ -1,0 +1,7 @@
+# downloaded inputs and build outputs
+data/
+out/
+.venv/
+venv/
+__pycache__/
+*.pyc

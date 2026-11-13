@@ -1,0 +1,8 @@
+# 15 districts, the same count as LA's City Council, drawn from scratch.
+# No one-per-council seeds, so districts start from population-weighted k-means.
+districts  = 15
+balance_on = "pop"
+tolerance  = 0.01
+keep_whole = "neighborhoods"
+stick      = 1.0
+out = "../out/fifteen"

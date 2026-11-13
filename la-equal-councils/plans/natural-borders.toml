@@ -1,0 +1,8 @@
+# 99 districts that try not to cross freeways, the Mulholland ridge or the LA River,
+# and keep LA Times neighborhoods together where they can.
+districts  = 99
+keep_whole = "neighborhoods"
+stick      = 1.5
+barriers   = ["freeways", "mulholland", "la_river"]
+barrier_strength = 4.0
+out = "../out/natural-borders"

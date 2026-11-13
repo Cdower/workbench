@@ -1,0 +1,5 @@
+# 99 districts with equal numbers of adults (18+) instead of residents.
+# Neighborhoods with lots of kids get more residents per district.
+districts  = 99
+balance_on = "vap"
+out = "../out/adults"

@@ -1,0 +1,34 @@
+# Default plan for redistrict.py. Every setting is optional; anything left out
+# uses the value shown here. Command-line flags override this file, e.g.
+#   python redistrict.py build --districts 51 --tolerance 0.02
+# Copy it into plans/ to keep variations side by side, then
+#   python redistrict.py build --config plans/my-plan.toml
+
+[districts]
+districts  = 99        # how many districts to draw. 99 = one per certified council (keeps names and heir_of)
+balance_on = "pop"     # what every district gets an equal share of:
+                       #   pop           residents
+                       #   vap           adults 18 and over
+                       #   households    occupied homes
+                       #   housing_units all homes, occupied or not
+tolerance  = 0.01      # largest allowed difference from an equal share: 0.01 = ±1%.
+                       # With census blocks, ~0.005 (±0.5%) is about as tight as 99 districts get.
+
+[territory]
+coverage = "all"       # "all" = the whole city; "councils" = certified councils only;
+                       # or LA Times neighborhood names: "Pacific Palisades,Brentwood"
+units    = "blocks"    # "blocks" (precise; needs `python redistrict.py fetch`) or "tracts" (quick, about ±5%)
+
+[shape]
+seeds       = "auto"      # where districts start: "councils" (one per council, needs districts = 99),
+                          # "kmeans" (population-weighted), or "auto" (councils when possible)
+keep_whole  = "councils"  # what to avoid splitting: "councils", "neighborhoods" (LA Times) or "none"
+stick       = 1.0         # how hard to keep those together: 0 = ignore, 1 = default, 3+ = strongly
+barriers    = []          # lines districts should avoid crossing. Built in:
+                          #   "freeways", "mulholland" (the Santa Monica Mountains ridge), "la_river"
+                          # or a path to any line or polygon file, e.g. "my_lines.gpkg"
+barrier_strength = 3.0    # crossing a barrier counts as this many times the distance
+random_seed = 1           # changes the k-means starting points
+
+[output]
+out = "out"               # folder for la_nc_equal_pop.gpkg and friends (relative to this file)

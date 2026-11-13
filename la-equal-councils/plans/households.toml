@@ -1,0 +1,5 @@
+# 99 districts with equal numbers of households (occupied homes).
+# Big-family neighborhoods get more people per district; areas of single renters fewer.
+districts  = 99
+balance_on = "households"
+out = "../out/households"
