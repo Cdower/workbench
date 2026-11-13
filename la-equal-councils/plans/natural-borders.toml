@@ -1,8 +1,9 @@
-# 99 districts that try not to cross freeways, the Mulholland ridge or the LA River,
-# and keep LA Times neighborhoods together where they can.
+# 99 districts that keep LA Times neighborhoods whole where they can, and also
+# route around freeways, rail, the LA River and the Mulholland ridge.
 districts  = 99
 keep_whole = "neighborhoods"
 stick      = 1.5
-barriers   = ["freeways", "mulholland", "la_river"]
+barriers   = ["freeways", "rail", "la_river", "mulholland"]
+barrier_routing  = true
 barrier_strength = 4.0
 out = "../out/natural-borders"

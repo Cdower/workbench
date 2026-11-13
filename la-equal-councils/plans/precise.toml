@@ -1,0 +1,5 @@
+# As equal as census blocks allow: ±0.5%, with no slack left for sliding lines onto barriers.
+districts        = 99
+tolerance        = 0.005
+smooth           = false
+out = "../out/precise"

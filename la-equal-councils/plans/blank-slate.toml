@@ -1,6 +1,8 @@
-# 99 districts that ignore today's councils entirely: the most compact shapes.
+# 99 districts started from population-weighted k-means instead of council centers,
+# with no barriers: the most compact shapes.
 districts  = 99
 seeds      = "kmeans"
 keep_whole = "none"
-stick      = 0
+barriers   = []
+smooth     = false
 out = "../out/blank-slate"

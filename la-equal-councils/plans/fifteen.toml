@@ -2,7 +2,7 @@
 # No one-per-council seeds, so districts start from population-weighted k-means.
 districts  = 15
 balance_on = "pop"
-tolerance  = 0.01
+tolerance  = 0.025
 keep_whole = "neighborhoods"
 stick      = 1.0
 out = "../out/fifteen"

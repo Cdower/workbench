@@ -66,6 +66,8 @@ PL_CSV = DATA / "la_county_2020_block_pl94171.csv"       # P.L. 94-171 by block,
 ROADS_ZIP = DATA / "tl_2020_06037_roads.zip"
 LINEARWATER_ZIP = DATA / "tl_2020_06037_linearwater.zip"
 AREAWATER_ZIP = DATA / "tl_2020_06037_areawater.zip"
+RAILS_ZIP = DATA / "tl_2020_us_rails.zip"
+LA_BBOX = (-118.95, 33.70, -117.65, 34.82)               # lon/lat, LA County
 
 DEMO = ["pop", "pop_hisp", "pop_white", "pop_black", "pop_aian",
         "pop_asian", "pop_nhpi", "pop_other", "pop_two", "vap", "households", "housing_units"]
@@ -79,6 +81,7 @@ BARRIER_CHOICES = {
     "freeways": "freeways (TIGER primary roads)",
     "mulholland": "Mulholland Drive, the Santa Monica Mountains ridge",
     "la_river": "the Los Angeles River",
+    "rail": "railroads and rail transit (TIGER rails)",
 }
 LA_COUNTY_POP_2020 = 10_014_009
 
@@ -98,10 +101,15 @@ class Plan:
     coverage: str = "all"               # all | councils | comma-separated LA Times neighborhoods
     units: str = "blocks"               # blocks | tracts
     seeds: str = "auto"                 # auto | councils | kmeans
-    keep_whole: str = "councils"        # councils | neighborhoods | none
-    stick: float = 1.0                  # how hard to keep those groups whole (0 = not at all)
-    barriers: list = field(default_factory=list)   # freeways, mulholland, la_river, or paths to line files
-    barrier_strength: float = 3.0       # distance multiplier for crossing a barrier
+    keep_whole: str = "none"            # none | councils | neighborhoods: groups to keep together (optional)
+    stick: float = 1.0                  # with keep_whole: how hard to keep those groups whole (0 = not at all)
+    keep_small_whole: bool = True       # with keep_whole: groups smaller than a district stay whole unless the tolerance needs a split
+    barriers: list = field(default_factory=lambda: ["freeways", "rail", "la_river", "mulholland"])
+    smooth: bool = True                 # after balancing, move lines onto barriers (and keep_whole lines)
+    barrier_routing: bool = False       # also measure distance along the street network (crossings cost more)
+    barrier_strength: float = 3.0       # with barrier_routing: distance multiplier for crossing a barrier
+    population_file: str = ""           # optional block-level counts to use instead (e.g. Statewide Database adjusted)
+    population_columns: dict = field(default_factory=dict)  # our column -> its column, e.g. {pop = "TOTPOP"}
     random_seed: int = 1                # for k-means seeds
     out: str = "out"                    # output folder (relative to the plan file's folder)
 
@@ -110,6 +118,8 @@ class Plan:
             raise SystemExit("districts must be at least 2")
         if self.balance_on not in BALANCE_CHOICES:
             raise SystemExit(f"balance_on must be one of {', '.join(BALANCE_CHOICES)}")
+        if self.population_file and not Path(self.population_file).exists():
+            raise SystemExit(f"population_file {self.population_file} not found")
         if not 0 < self.tolerance < 0.5:
             raise SystemExit("tolerance is a fraction: 0.01 means ±1%")
         if self.units not in ("blocks", "tracts"):
@@ -152,6 +162,8 @@ def load_plan(path: str | None, overrides: dict) -> Plan:
     if isinstance(plan.barriers, str):
         plan.barriers = [b.strip() for b in plan.barriers.split(",") if b.strip()]
     plan.barriers = [b if b in BARRIER_CHOICES else str((base / b).resolve()) for b in plan.barriers]
+    if plan.population_file and not Path(plan.population_file).is_absolute():
+        plan.population_file = str((base / plan.population_file).resolve())
     if not Path(plan.out).is_absolute():
         plan.out = str((base / plan.out).resolve())
     return plan.validate()
@@ -199,19 +211,35 @@ def load_ncs(coverage: str) -> gpd.GeoDataFrame:
     return nc
 
 
-def load_pl() -> pd.DataFrame:
+def load_pl(population_file: str = "", population_columns: dict | None = None) -> pd.DataFrame:
     if not PL_CSV.exists():
         raise SystemExit("Census counts missing (run: python redistrict.py fetch)")
     pl = pd.read_csv(PL_CSV, dtype={"GEOID20": str})
     assert int(pl["pop"].sum()) == LA_COUNTY_POP_2020, "LA County 2020 total mismatch"
+    if population_file:
+        # e.g. the Statewide Database's adjusted P.L. 94-171, with incarcerated people
+        # counted at their last address (FAIR MAPS Act). Columns not mapped keep census values.
+        alt = pd.read_csv(population_file, dtype=str)
+        key = "GEOID20" if "GEOID20" in alt else "BLOCK20" if "BLOCK20" in alt else None
+        if key is None:
+            raise SystemExit(f"{population_file} needs a GEOID20 or BLOCK20 column")
+        alt = alt.set_index(alt[key].str.zfill(15))
+        cols = population_columns or {"pop": "pop"}
+        for ours, theirs in cols.items():
+            if ours not in DEMO or theirs not in alt:
+                raise SystemExit(f"population_columns: can't map {ours} -> {theirs}")
+            new = pl.GEOID20.map(pd.to_numeric(alt[theirs], errors="coerce"))
+            pl[ours] = new.fillna(pl[ours]).round().astype(int)
+        log(f"population: {Path(population_file).name} for {', '.join(cols)} "
+            f"(LA County residents {int(pl['pop'].sum()):,})")
     missing = [c for c in DEMO if c not in pl]
     if missing:
         raise SystemExit(f"{PL_CSV.name} lacks {', '.join(missing)} (run: python redistrict.py fetch --force)")
     return pl
 
 
-def load_units(kind: str, nc: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
-    pl = load_pl()
+def load_units(kind: str, nc: gpd.GeoDataFrame, plan=None) -> gpd.GeoDataFrame:
+    pl = load_pl(plan.population_file if plan else "", plan.population_columns if plan else None)
     if kind == "blocks":
         if not BLOCKS_ZIP.exists():
             raise SystemExit("Census blocks missing (run: python redistrict.py fetch), or use units = \"tracts\"")
@@ -284,6 +312,11 @@ def load_barriers(names) -> gpd.GeoSeries | None:
             r = gpd.read_file(ROADS_ZIP, columns=["FULLNAME", "MTFCC"]).to_crs(WORK_CRS)
             sel = r[r.MTFCC == "S1100"] if b == "freeways" else r[r.FULLNAME.fillna("").str.startswith("Mulholland")]
             parts.append(sel.geometry)
+        elif b == "rail":
+            if not RAILS_ZIP.exists():
+                raise SystemExit("TIGER rails missing (run: python redistrict.py fetch)")
+            r = gpd.read_file(RAILS_ZIP, bbox=LA_BBOX).to_crs(WORK_CRS)
+            parts.append(r.geometry)
         elif b == "la_river":
             if not LINEARWATER_ZIP.exists() or not AREAWATER_ZIP.exists():
                 raise SystemExit("TIGER water missing (run: python redistrict.py fetch)")
@@ -345,6 +378,155 @@ def build_graph(units: gpd.GeoDataFrame, barriers=None, min_shared_m: float = 1.
     log(f"graph: {G.number_of_nodes():,} nodes, {G.number_of_edges():,} edges"
         + (f", {nb:,} along barriers" if barriers is not None else ""))
     return G
+
+
+# --------------------------------------------------------------------------
+# 2b. whole-council units (FAIR MAPS rank 2: keep communities whole)
+# --------------------------------------------------------------------------
+def consolidate_groups(G, assign, w, pts, K, tol, labels, small):
+    """Reunite each split small group (FAIR MAPS rank 2) by moving its stray pieces
+    into the district holding most of it, then rebalancing with blocks that aren't
+    part of a reunited group. A group that can't be reunited within the tolerance,
+    or without splitting a district, is put back and left split."""
+    T = w.sum() / K
+    lab = pd.Series(labels)
+    idx_of = {g: np.flatnonzero(lab.values == g) for g in small}
+    locked = np.zeros(len(assign), bool)
+
+    def minority(g):
+        i = idx_of[g]
+        sh = np.bincount(assign[i], weights=w[i] + 1e-9, minlength=K)
+        return sh.sum() - sh.max()
+
+    whole, kept_split = [], []
+    for g in sorted(small, key=minority):
+        i = idx_of[g]
+        sh = np.bincount(assign[i], weights=w[i] + 1e-9, minlength=K)
+        M = int(np.argmax(sh))
+        stray = i[assign[i] != M]
+        if len(stray) == 0:
+            locked[i] = True
+            whole.append(g)
+            continue
+        before = assign.copy()
+        losers = set(assign[stray].tolist())
+        assign[stray] = M
+        ok = all(nx.is_connected(G.subgraph(np.flatnonzero(assign == d))) for d in losers | {M}
+                 if (assign == d).any())
+        if ok:
+            locked[i] = True
+            if np.abs(np.bincount(assign, weights=w, minlength=K) - T).max() / T > tol:
+                assign = polish(G, assign, w, pts, K, tol, max_passes=40, locked=locked, quiet=True)
+                assign = chain_push(G, assign, w, pts, K, tol, max_iter=400, locked=locked, quiet=True)
+            ok = np.abs(np.bincount(assign, weights=w, minlength=K) - T).max() / T <= tol
+        if ok:
+            whole.append(g)
+        else:
+            assign[:] = before
+            locked[i] = False
+            kept_split.append(g)
+    log(f"whole groups: {len(whole)} of {len(small)} small groups kept whole"
+        + (f"; left split to stay within tolerance: {', '.join(kept_split)}" if kept_split else ""))
+    return assign, locked, kept_split
+
+
+def cut_cost(G, labels):
+    """Cost of a district line along each edge: 1 for an ordinary street, less along
+    a barrier (freeway, rail, river, ridge; FAIR MAPS rank 4) or, with keep_whole,
+    a line between two groups."""
+    def c(u, v):
+        x = 1.0
+        if G[u][v].get("barrier"):
+            x -= 0.6
+        if labels is not None and labels[u] != labels[v]:
+            x -= 0.6
+        return max(x, 0.1)
+    return c
+
+
+def smooth_boundaries(G, assign, w, K, tol, labels, passes=6, locked=None):
+    """Move boundary units when that makes the lines cheaper (onto barriers, fewer
+    cut edges), staying inside the tolerance and contiguous."""
+    T = w.sum() / K
+    lo, hi = T * (1 - tol), T * (1 + tol)
+    mem = district_members(assign, K)
+    pk = np.bincount(assign, weights=w, minlength=K)
+    c = cut_cost(G, labels)
+    total = 0
+    for p in range(passes):
+        moved = 0
+        for u in range(len(assign)):
+            if locked is not None and locked[u]:
+                continue
+            A = assign[u]
+            nb = {}
+            for v in G[u]:
+                nb.setdefault(assign[v], []).append(v)
+            if all(k == A for k in nb):
+                continue
+            stay = sum(c(u, v) for v in nb.get(A, []))
+            for B, vs in nb.items():
+                if B == A:
+                    continue
+                gain = stay - sum(c(u, v) for v in vs)
+                if gain < -1e-9 and pk[A] - w[u] >= lo and pk[B] + w[u] <= hi and connected_without(G, mem[A], u):
+                    assign[u] = B
+                    mem[A].discard(u); mem[B].add(u)
+                    pk[A] -= w[u]; pk[B] += w[u]
+                    moved += 1
+                    break
+        total += moved
+        if moved == 0:
+            break
+    log(f"smoothing: moved {total:,} units onto cheaper lines")
+    return assign
+
+
+def fix_multipart(blocks, assign, K):
+    """Districts must be one piece on the ground (corners and water don't count).
+    Any outlying piece joins the district it shares the longest boundary with."""
+    dis = gpd.GeoDataFrame({"d": assign}, geometry=blocks.geometry.values, crs=blocks.crs).dissolve("d")
+    moved, left = 0, []
+    sidx = blocks.sindex
+    for d, geom in dis.geometry.items():
+        parts = sorted(getattr(geom, "geoms", [geom]), key=lambda g: g.area, reverse=True)
+        for part in parts[1:]:
+            cand = sidx.query(part, predicate="intersects")
+            idx = [i for i in cand if assign[i] == d and blocks.geometry.values[i].representative_point().within(part.buffer(1))]
+            best, blen = None, 1.0
+            for e, g2 in dis.geometry.items():
+                if e != d and g2.intersects(part.buffer(1)):
+                    L = part.boundary.intersection(g2.buffer(1)).length
+                    if L > blen:
+                        best, blen = e, L
+            if best is None or not idx:
+                left.append(int(d))
+                continue
+            assign[idx] = best
+            moved += len(idx)
+    log(f"contiguity: moved {moved} block(s) from detached pieces" + (f"; {len(left)} piece(s) left (islands)" if left else ""))
+    return assign
+
+
+def split_table(units, bal, T, tol):
+    """Per council (and uncovered area): how its residents are spread across the new
+    districts. Today's councils aren't a constraint; this measures how much changes.
+    effective_splits: 1/sum(p^2) - 1 (50/50 = 1, 90/10 = 0.22); split_pairs: chance two
+    residents land in different districts; min_pieces: the fewest districts it must span."""
+    t = units.groupby(["nc_current", "district_id"]).agg(pop=("pop", "sum"), n=("pop", "size"), b=(bal, "sum")).reset_index()
+    rows = []
+    for g, x in t.groupby("nc_current"):
+        tot = max(x["pop"].sum(), 1)
+        p = x["pop"] / tot
+        pieces = int((x["pop"] > 0).sum()) or 1
+        min_pieces = max(1, int(np.ceil(x["b"].sum() / (T * (1 + tol)))))
+        rows.append({"NAME": g, "pop": int(x["pop"].sum()), "pieces": pieces, "min_pieces": min_pieces,
+                     "extra_pieces": max(0, pieces - min_pieces),
+                     "effective_splits": round(float(1 / (p ** 2).sum() - 1), 3),
+                     "split_pairs": round(float(1 - (p ** 2).sum()), 3),
+                     "districts": "; ".join(f"{d} ({v:.0%})" for d, v in
+                                            zip(x.district_id, p) if v > 0)})
+    return pd.DataFrame(rows).sort_values(["extra_pieces", "effective_splits"], ascending=False)
 
 
 class NetworkDistance:
@@ -427,7 +609,7 @@ def balance(units, w, K, plan, groups, council_home, netdist, G):
     N = len(pts)
     stick = plan.stick if groups is not None else 0.0
     # coarse level: block groups
-    key = units.unit_id.str[:12] if units.unit_id.str.len().iloc[0] == 15 else units.unit_id
+    key = units["coarse"] if "coarse" in units else units.unit_id
     ck, cidx = np.unique(key.values, return_inverse=True)
     C = len(ck)
     cw = np.bincount(cidx, weights=w, minlength=C)
@@ -579,7 +761,7 @@ def connected_without(G, members: set, u: int) -> bool:
     return not targets
 
 
-def polish(G, assign, w, pts, K, tol, max_passes=400):
+def polish(G, assign, w, pts, K, tol, max_passes=400, locked=None, quiet=False):
     T = w.sum() / K
     mem = district_members(assign, K)
     pk = np.array([w[list(m)].sum() for m in mem], float)
@@ -598,6 +780,8 @@ def polish(G, assign, w, pts, K, tol, max_passes=400):
             for _rep in range(4):
                 cands = {}
                 for u in mem[A]:
+                    if locked is not None and locked[u]:
+                        continue
                     pu = w[u]
                     for v in G[u]:
                         B = assign[v]
@@ -622,14 +806,16 @@ def polish(G, assign, w, pts, K, tol, max_passes=400):
                     break
         if p % 25 == 0:
             cent = np.array([centre(d) for d in range(K)])
-            log(f"  polish pass {p}: max deviation {np.abs(pk - T).max() / T:.3%}")
+            if not quiet:
+                log(f"  polish pass {p}: max deviation {np.abs(pk - T).max() / T:.3%}")
         if moved == 0:
             break
-    log(f"polish: max deviation {np.abs(pk - T).max() / T:.3%}")
+    if not quiet:
+        log(f"polish: max deviation {np.abs(pk - T).max() / T:.3%}")
     return assign
 
 
-def chain_push(G, assign, w, pts, K, tol, max_iter=3000):
+def chain_push(G, assign, w, pts, K, tol, max_iter=3000, locked=None, quiet=False):
     """When greedy swaps stall, push weight along a path of neighbouring
     districts (A -> X1 -> ... -> Z) from the worst district to the nearest one
     on the other side of the target, one boundary bite per hop."""
@@ -663,7 +849,8 @@ def chain_push(G, assign, w, pts, K, tol, max_iter=3000):
             return None
         sub = G.subgraph(mem[P])
         cuts = set(nx.articulation_points(sub))
-        border = [u for u in mem[P] if any(assign[v] == Q for v in G[u])]
+        border = [u for u in mem[P] if any(assign[v] == Q for v in G[u])
+                  and (locked is None or not locked[u])]
         singles = [u for u in border if u not in cuts]
         full = [u for u in singles if w[u] > 0]
         if full:
@@ -676,7 +863,7 @@ def chain_push(G, assign, w, pts, K, tol, max_iter=3000):
                 comps = sorted(nx.connected_components(sub.subgraph(mem[P] - {u})),
                                key=lambda c: (w[list(c)].sum(), len(c)), reverse=True)
                 lost = [u] + [x for c in comps[1:] for x in c]
-                if len(lost) <= max(20, len(mem[P]) // 8):
+                if len(lost) <= max(20, len(mem[P]) // 8) and (locked is None or not locked[lost].any()):
                     bites.append(lost)
         full = [b for b in bites if w[b].sum() > 0]
         if full:
@@ -752,9 +939,10 @@ def chain_push(G, assign, w, pts, K, tol, max_iter=3000):
             skip.clear()
         else:
             skip.add(A)
-        if it % 200 == 0:
+        if it % 200 == 0 and not quiet:
             log(f"  chain {it}: max deviation {np.abs(pk - T).max() / T:.3%}")
-    log(f"chain push: max deviation {np.abs(pk - T).max() / T:.3%}")
+    if not quiet:
+        log(f"chain push: max deviation {np.abs(pk - T).max() / T:.3%}")
     return assign
 
 
@@ -822,6 +1010,15 @@ def district_layer(units: gpd.GeoDataFrame, bal: str, nc_pop: pd.Series) -> gpd.
     d["area_sqmi"] = (d.geometry.area / 2_589_988.11).round(2)
     d["density_sqmi"] = (d["pop"] / d["area_sqmi"].clip(lower=0.01)).round(0)
     d["polsby_popper"] = (4 * np.pi * d.geometry.area / d.geometry.length ** 2).round(3)
+    import shapely
+    d["reock"] = (d.geometry.area / (np.pi * shapely.minimum_bounding_radius(d.geometry.values) ** 2)).round(3)
+    if "ipx" in units:
+        # person-distance: how far residents live from their district's population centre
+        pw = units["pop"] + 1e-6
+        cx = (units.ipx * pw).groupby(units.district_id).sum() / pw.groupby(units.district_id).sum()
+        cy = (units.ipy * pw).groupby(units.district_id).sum() / pw.groupby(units.district_id).sum()
+        dist = np.hypot(units.ipx - units.district_id.map(cx), units.ipy - units.district_id.map(cy))
+        d["mean_dist_km"] = ((dist * pw).groupby(units.district_id).sum() / pw.groupby(units.district_id).sum() / 1000).round(2)
     d["n_parts"] = d.geometry.apply(lambda g: len(getattr(g, "geoms", [g])))
     share = (units.groupby(["district_id", "nc_current"])["pop"].sum()
              .groupby(level=0, group_keys=False).apply(lambda x: (x / max(x.sum(), 1)).sort_values(ascending=False)))
@@ -838,7 +1035,7 @@ def _write_layer(gdf, gpkg, layer):
                                    layer_options={"OVERWRITE": "YES"})
 
 
-def export(units, nc, outdir: Path, meta: dict, bal: str, keep_units_layer=False):
+def export(units, nc, outdir: Path, meta: dict, bal: str, keep_units_layer=False, cut_edges=None):
     """Write the GeoPackage (+ GeoJSON/CSV). With keep_units_layer the units
     layer (which you may be editing in QGIS) is left untouched."""
     outdir.mkdir(parents=True, exist_ok=True)
@@ -873,6 +1070,12 @@ def export(units, nc, outdir: Path, meta: dict, bal: str, keep_units_layer=False
     dist.drop(columns="geometry").to_csv(outdir / "districts_equal_pop.csv", index=False)
     units[["unit_id", "district_id"]].rename(columns={"unit_id": "GEOID20", "district_id": "District"}) \
         .to_csv(outdir / "unit_assignment.csv", index=False)
+    tol = (meta.get("plan") or {}).get("tolerance", 0.01)
+    splits = split_table(units, bal, T, tol)
+    old = outdir / "nc_splits.csv"
+    splits.to_csv(old, index=False)
+    split_ = splits[splits.pieces > 1]
+    pw = splits["pop"] / max(splits["pop"].sum(), 1)
     cert = ncl.certified.astype(bool)
     meta.update(dict(
         districts=int(K), balance_on=bal, total_pop=int(units["pop"].sum()), total_balanced=int(units[bal].sum()),
@@ -881,7 +1084,13 @@ def export(units, nc, outdir: Path, meta: dict, bal: str, keep_units_layer=False
         min_balanced=int(dist[bal].min()), max_balanced=int(dist[bal].max()),
         current_nc_min_pop=int(ncl.loc[cert, "pop"].min()), current_nc_max_pop=int(ncl.loc[cert, "pop"].max()),
         added_area_pop={r.NAME: int(r["pop"]) for _, r in ncl[~cert].iterrows()},
-        multipart_districts=int((dist.n_parts > 1).sum())))
+        multipart_districts=int((dist.n_parts > 1).sum()),
+        councils_split=int(len(split_)), extra_pieces=int(splits.extra_pieces.sum()),
+        effective_splits=round(float(splits.effective_splits.sum()), 2),
+        split_pairs=round(float((splits.split_pairs * pw).sum()), 4),
+        mean_polsby_popper=round(float(dist.polsby_popper.mean()), 3), mean_reock=round(float(dist.reock.mean()), 3),
+        mean_dist_km=round(float(dist.mean_dist_km.mean()), 2) if "mean_dist_km" in dist else None,
+        cut_edges=cut_edges))
     (outdir / "summary.json").write_text(json.dumps(meta, indent=2))
     log(json.dumps({k: v for k, v in meta.items() if k != "added_area_pop"}, indent=2))
     log(f"wrote {gpkg}")
@@ -987,52 +1196,76 @@ def cmd_build(args):
     plan = load_plan(args.config, {
         "districts": args.districts, "balance_on": args.balance_on, "tolerance": args.tolerance,
         "coverage": args.coverage, "units": args.units, "seeds": args.seeds, "keep_whole": args.keep_whole,
-        "stick": args.stick, "barriers": args.barriers, "barrier_strength": args.barrier_strength,
-        "random_seed": args.random_seed, "out": args.out})
+        "stick": args.stick, "keep_small_whole": args.keep_small_whole, "barriers": args.barriers,
+        "smooth": args.smooth, "barrier_routing": args.barrier_routing, "barrier_strength": args.barrier_strength,
+        "population_file": args.population_file, "random_seed": args.random_seed, "out": args.out})
+    if args.add_barriers:
+        extra = [b.strip() for b in args.add_barriers.split(",") if b.strip()]
+        plan.barriers = list(plan.barriers) + [b if b in BARRIER_CHOICES else str(Path(b).resolve()) for b in extra]
+        plan.validate()
     log("settings: " + ", ".join(f"{k}={v}" for k, v in asdict(plan).items()))
-    K = plan.districts
+    K, tol = plan.districts, plan.tolerance
     nc = load_ncs(plan.coverage)
     n_cert = int(nc.certified.sum())
-    units = load_units(plan.units, nc)
-    nc, units = consolidate_extras(nc, units)
-    units.attrs["n_certified"] = n_cert
+    blocks = load_units(plan.units, nc, plan)
+    nc, blocks = consolidate_extras(nc, blocks)
+    blocks.attrs["n_certified"] = n_cert
     names = nc.NAME.tolist()
     barriers = load_barriers(plan.barriers)
-    G = build_graph(units, barriers)
-    pts = np.c_[units.ipx, units.ipy].astype(float)
-    w = units[plan.balance_on].values.astype(float)
-    if w.sum() <= 0:
+    GB = build_graph(blocks, barriers)
+    wb = blocks[plan.balance_on].values.astype(float)
+    if wb.sum() <= 0:
         raise SystemExit(f"no {plan.balance_on} in the chosen territory")
+    T = wb.sum() / K
+    labels = group_labels(blocks, plan.keep_whole)
+
+    # with keep_whole: groups smaller than a district are kept whole where the tolerance allows
+    small = set()
+    if plan.keep_small_whole and labels is not None:
+        gsum = pd.Series(wb).groupby(pd.Series(labels)).sum()
+        small = set(gsum[gsum <= T * (1 + tol)].index)
+
     council_home = None
     if K == n_cert:
-        h = units.nc_current.map({n: i for i, n in enumerate(names)}).values
+        h = blocks.nc_current.map({n: i for i, n in enumerate(names)}).values
         council_home = np.where(h < n_cert, h, -1)
-    groups = group_labels(units, plan.keep_whole)
-    netdist = NetworkDistance(G, pts, plan.barrier_strength) if barriers is not None else None
-
-    assign = balance(units, w, K, plan, groups, council_home, netdist, G)
-    assign = repair_contiguity(G, assign, w, K)
-    if len(np.unique(assign)) != K:
+    pts_b = np.c_[blocks.ipx, blocks.ipy].astype(float)
+    netdist = NetworkDistance(GB, pts_b, plan.barrier_strength) if (barriers is not None and plan.barrier_routing) else None
+    bassign = balance(blocks.assign(coarse=blocks.unit_id.str[:12] if plan.units == "blocks" else blocks.unit_id),
+                      wb, K, plan, labels, council_home, netdist, GB)
+    bassign = repair_contiguity(GB, bassign, wb, K)
+    if len(np.unique(bassign)) != K:
         raise SystemExit("a district vanished during repair; try another random_seed or a lower stick")
-    T = w.sum() / K
-    for _round in range(3):
-        assign = polish(G, assign, w, pts, K, plan.tolerance)
-        assign = chain_push(G, assign, w, pts, K, plan.tolerance)
-        if np.abs(np.bincount(assign, weights=w, minlength=K) - T).max() / T <= plan.tolerance:
-            break
-    assign = polish(G, assign, w, pts, K, plan.tolerance)
-    dev = np.abs(np.bincount(assign, weights=w, minlength=K) - T).max() / T
-    if dev > plan.tolerance:
-        log(f"note: best reachable deviation is ±{dev:.2%}, above the ±{plan.tolerance:.2%} asked for")
 
-    dnames, heirs = name_districts(units, assign, names, n_cert, K)
+    def deviation(a):
+        return np.abs(np.bincount(a, weights=wb, minlength=K) - T).max() / T
+
+    for _round in range(3):
+        if deviation(bassign) <= tol:
+            break
+        bassign = polish(GB, bassign, wb, pts_b, K, tol)
+        bassign = chain_push(GB, bassign, wb, pts_b, K, tol)
+    locked, kept_split = None, []
+    if small:
+        bassign, locked, kept_split = consolidate_groups(GB, bassign, wb, pts_b, K, tol, labels, small)
+    if plan.smooth:
+        bassign = smooth_boundaries(GB, bassign, wb, K, tol, labels, locked=locked)
+    bassign = fix_multipart(blocks, bassign, K)
+    dev = deviation(bassign)
+    if dev > tol:
+        log(f"note: best reachable deviation is ±{dev:.2%}, above the ±{tol:.2%} asked for")
+
+    dnames, heirs = name_districts(blocks, bassign, names, n_cert, K)
     order = sorted(range(K), key=lambda d: dnames[d])
     remap = {d: i + 1 for i, d in enumerate(order)}
-    units["district_id"] = [remap[a] for a in assign]
-    units["district_name"] = [dnames[a] for a in assign]
-    units["heir_of"] = [heirs[a] for a in assign]
-    meta = {"plan": asdict(plan), "units": plan.units, "within_tolerance": bool(dev <= plan.tolerance)}
-    export(units, nc, Path(plan.out), meta, plan.balance_on)
+    blocks["district_id"] = [remap[a] for a in bassign]
+    blocks["district_name"] = [dnames[a] for a in bassign]
+    blocks["heir_of"] = [heirs[a] for a in bassign]
+    cut = int(sum(1 for x, y in GB.edges() if bassign[x] != bassign[y]))
+    meta = {"plan": asdict(plan), "units": plan.units, "within_tolerance": bool(dev <= tol)}
+    if small:
+        meta["groups_left_split"] = kept_split
+    export(blocks, nc, Path(plan.out), meta, plan.balance_on, cut_edges=cut)
 
 
 def cmd_restat(args):
@@ -1066,6 +1299,7 @@ URLS = {
     "linearwater": "https://www2.census.gov/geo/tiger/TIGER2020/LINEARWATER/tl_2020_06037_linearwater.zip",
     "areawater": "https://www2.census.gov/geo/tiger/TIGER2020/AREAWATER/tl_2020_06037_areawater.zip",
     "tracts": "https://www2.census.gov/geo/tiger/TIGER2020/TRACT/tl_2020_06_tract.zip",
+    "rails": "https://www2.census.gov/geo/tiger/TIGER2020/RAILS/tl_2020_us_rails.zip",
     "nc": ("https://maps.lacity.org/lahub/rest/services/Boundaries/MapServer/18/query"
            "?where=1%3D1&outFields=*&outSR=4326&f=geojson"),
     "city": ("https://maps.lacity.org/lahub/rest/services/Boundaries/MapServer/7/query"
@@ -1124,6 +1358,7 @@ def cmd_fetch(args):
     get("roads", ROADS_ZIP, "LA County roads (freeways, Mulholland)")
     get("linearwater", LINEARWATER_ZIP, "LA County rivers and streams")
     get("areawater", AREAWATER_ZIP, "LA County water areas")
+    get("rails", RAILS_ZIP, "US railroads and rail transit (~30 MB)")
     if not TRACTS_SHP.exists():
         z = DATA / "tl_2020_06_tract.zip"
         get("tracts", z, "2020 census tracts for California", always=True)
@@ -1154,8 +1389,16 @@ def main():
     b.add_argument("--seeds", choices=["auto", "councils", "kmeans"])
     b.add_argument("--keep-whole", choices=["councils", "neighborhoods", "none"])
     b.add_argument("--stick", type=float, help="how hard to keep keep_whole groups intact (0 = not at all)")
-    b.add_argument("--barriers", help="comma-separated: freeways, mulholland, la_river, or paths to line files")
-    b.add_argument("--barrier-strength", type=float, help="distance multiplier for crossing a barrier (default 3)")
+    b.add_argument("--keep-small-whole", action=argparse.BooleanOptionalAction, default=None,
+                   help="never split a keep_whole group smaller than a district unless the tolerance needs it")
+    b.add_argument("--smooth", action=argparse.BooleanOptionalAction, default=None,
+                   help="move lines onto barriers and council lines after balancing")
+    b.add_argument("--barrier-routing", action=argparse.BooleanOptionalAction, default=None,
+                   help="also measure distance along the street network, where crossing a barrier costs more")
+    b.add_argument("--population-file", help="block-level counts to use instead of the census file (see README)")
+    b.add_argument("--barriers", help="comma-separated: freeways, rail, la_river, mulholland, or paths to line files; '' for none")
+    b.add_argument("--add-barriers", help="comma-separated barriers to add to the plan's list (e.g. your own line file)")
+    b.add_argument("--barrier-strength", type=float, help="with --barrier-routing: distance multiplier for crossing (default 3)")
     b.add_argument("--random-seed", type=int)
     b.add_argument("--out", help="output folder")
     b.set_defaults(fn=cmd_build)

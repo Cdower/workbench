@@ -1,0 +1,8 @@
+# Keep today's councils together where the tolerance allows: every council smaller than a
+# district stays whole unless balancing needs a split (each one is logged), and bigger ones
+# are kept in few pieces. Lines also slide onto council borders.
+districts        = 99
+keep_whole       = "councils"
+keep_small_whole = true
+stick            = 1.0
+out = "../out/keep-councils"
